@@ -1,0 +1,5 @@
+.env
+*.log
+*.war
+vprofile-project/
+/database/init/01-accounts.sql

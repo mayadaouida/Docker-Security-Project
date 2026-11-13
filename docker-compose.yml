@@ -1,0 +1,222 @@
+name: docker-security-project
+
+services:
+  nginx:
+    build:
+      context: ./nginx
+    image: docker-security-nginx:1.0
+    container_name: secure-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - frontend
+    depends_on:
+      - tomcat
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    mem_limit: 64m
+    cpus: 0.50
+
+  tomcat:
+    image: tomcat:10.1-jdk21-temurin
+    container_name: secure-tomcat
+    expose:
+      - "8080"
+    environment:
+      JAVA_OPTS: >-
+        -Djdbc.driverClassName=com.mysql.cj.jdbc.Driver
+        -Djdbc.url=jdbc:mysql://db01:3306/accounts?useUnicode=true\&characterEncoding=UTF-8\&zeroDateTimeBehavior=convertToNull
+        -Djdbc.username=admin
+        -Djdbc.password=${DB_PASSWORD:?Set DB_PASSWORD in .env}
+        -Dmemcached.active.host=mc01
+        -Dmemcached.active.port=11211
+        -Dmemcached.standBy.host=mc01
+        -Dmemcached.standBy.port=11211
+        -Drabbitmq.address=rmq01
+        -Drabbitmq.port=5672
+        -Drabbitmq.username=${RABBITMQ_USER:-appuser}
+        -Drabbitmq.password=${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+        -Delasticsearch.host=elasticsearch
+        -Delasticsearch.port=9200
+        -Delasticsearch.cluster=vprofile
+        -Delasticsearch.node=vprofilenode
+    volumes:
+      - ./app/ROOT/ROOT.war:/usr/local/tomcat/webapps/ROOT.war:ro
+      - ./tomcat/conf/server.xml:/usr/local/tomcat/conf/server.xml:ro
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /usr/local/tomcat/temp
+      - /usr/local/tomcat/work
+      - /usr/local/tomcat/webapps
+      - /usr/local/tomcat/conf/Catalina
+      - /usr/local/tomcat/logs
+    mem_limit: 256m
+    cpus: 1.00
+
+  mariadb:
+    image: mariadb:11.4
+    container_name: secure-mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+      MARIADB_DATABASE: ${DB_NAME:-accounts}
+      MARIADB_USER: ${DB_USER:-admin}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      backend:
+        aliases:
+          - db01
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    mem_limit: 256m
+    cpus: 1.00
+
+  memcached:
+    image: memcached:1.6-alpine
+    container_name: secure-memcached
+    command: ["memcached", "-m", "64", "-p", "11211", "-U", "0"]
+    expose:
+      - "11211"
+    networks:
+      backend:
+        aliases:
+          - mc01
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'version\r\n' | nc -w 2 127.0.0.1 11211 | grep -q '^VERSION'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    mem_limit: 64m
+    cpus: 0.25
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: secure-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-appuser}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      backend:
+        aliases:
+          - rmq01
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    mem_limit: 256m
+    cpus: 0.75
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.2
+    container_name: secure-elasticsearch
+    user: "1000:0"
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms192m -Xmx192m"
+      xpack.security.enabled: "false"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    read_only: false
+    tmpfs:
+      - /tmp
+      - /usr/share/elasticsearch/logs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 0.75
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  mariadb_data:
+  rabbitmq_data:
+  elasticsearch_data:
