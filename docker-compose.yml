@@ -86,7 +86,7 @@ services:
       - /usr/local/tomcat/webapps
       - /usr/local/tomcat/conf/Catalina
       - /usr/local/tomcat/logs
-    mem_limit: 256m
+    mem_limit: 384m
     cpus: 1.00
 
   mariadb:
@@ -176,7 +176,7 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
-    mem_limit: 256m
+    mem_limit: 384m
     cpus: 0.75
 
   elasticsearch:

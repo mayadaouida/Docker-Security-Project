@@ -1,3 +1,3 @@
 FROM nginx:stable-alpine
 
-RUN apk upgrade --no-cache libxslt
+RUN apk upgrade --no-cache libxslt zlib
